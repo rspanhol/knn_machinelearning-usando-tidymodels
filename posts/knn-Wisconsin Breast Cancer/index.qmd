@@ -1,0 +1,296 @@
+---
+title: "Tidymodels"
+author: "Gustavo Bruges"
+date: "2022-12-27"
+categories: [code]
+image: "image.jpg"
+---
+
+## Machine Learning con Tidymodels
+
+### Introducción a los k-vecinos más cercanos
+
+En essta sección aprenderemos sobre la clasificación mediante k-NN (vecinos más cercanos cercanos). A diferencia de muchos algoritmos de clasificación, k-nearest neighbors no realiza ningún aprendizaje. Simplemente almacena los datos de entrenamiento textualmente. Los ejemplos de prueba sin etiquetar se emparejan con los con los registros más similares del conjunto de entrenamiento mediante una función de distancia, y al ejemplo sin etiquetar se le asigna la etiqueta de sus vecinos.
+
+A pesar de que k-NN es un algoritmo muy sencillo, es capaz de abordar
+
+tareas extremadamente complejas, como la identificación de masas cancerosas.
+
+A pesar de la simplicidad de esta idea, los métodos de vecino más cercano son extremadamente potentes. Se han utilizado con éxito para:
+
+\- Aplicaciones de visión por ordenador, como el reconocimiento óptico de caracteres y reconocimiento facial, tanto en imágenes fijas como en vídeo
+
+\- Sistemas de recomendación que predicen si a una persona le gustará una película o una canción
+
+\- Identificación de patrones en datos genéticos para detectar proteínas o enfermedades específicas.
+
+En general, los clasificadores por vecino más próximo (k-NN) son adecuados para tareas de clasificación en las que las relaciones entre las características y las clases objetivo son numerosas, complicadas o extremadamente difíciles de entender, pero los elementos de clases similares tienden a ser bastante homogéneos.
+
+## Cargar paquetes
+
+------------------------------------------------------------------------
+
+```{r setup, warning=FALSE}
+library(tidymodels)
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(GGally)
+```
+
+### Datos de wisconsin data set:
+
+El examen sistemático del cáncer de mama permite diagnosticar y tratar la enfermedad antes de que cause síntomas perceptibles. El proceso de detección precoz consiste en examinar el tejido mamario en busca de bultos o masas anormales. Si se detecta un bulto, se realiza una biopsia por aspiración con aguja fina, en la que se utiliza una aguja hueca para extraer una pequeña muestra de células de la masa. A continuación, el personal de salud examina las células al microscopio para determinar si la masa puede ser maligna o benigna.
+
+Si el aprendizaje automático pudiera automatizar la identificación de células cancerosas, supondría un beneficio considerable para el sistema sanitario.
+
+Es probable que los procesos automatizados de detección, lo que permitiría a los médicos dedicar menos tiempo al diagnóstico y más al tratamiento.
+
+A continuación veremos un plantearemos el algoritmo k-NN en el diánostico de cáncer de mama de muestras provenientes de Breast Cancer Wisconsin <http://archive.ics.uci.edu/ml.>
+
+### Carga de los datos
+
+```{r}
+wbc <- read_csv("https://raw.githubusercontent.com/rspanhol/wisconsin-breast-cancer/main/wisconsin.csv")
+
+#Visionado de los datos
+glimpse(wbc)
+```
+
+### Limpieza inicial de los datos
+
+Se proceden a eliminar columnas que son innecesarias para el análisis, el identificador id y la última columna que contiene solamente valores NA, además se hace una modificación para que la varaible diagnosis sea de tipo categórica. Adicionalmente se corrigen los nombres cortos de variables con clean_names de janitor
+
+```{r}
+wbc <- wbc[-c(1,33)]
+glimpse(wbc)
+
+
+
+
+```
+
+Las 30 medidas numéricas comprenden la media, el error estándar y el peor valor (es decir, el mayor) de 10 características diferentes de los núcleos celulares digitalizados Estas incluyen:
+
+\- Radio
+
+\- Textura
+
+\- Perímetro
+
+\- Superficie
+
+\- Suavidad
+
+\- Compacidad
+
+\- Concavidad
+
+\- Puntos cóncavos
+
+\- Simetría
+
+\- Dimensión fractal
+
+```{r}
+#Limpiar nombres de variables
+wbc <- wbc %>% clean_names()
+glimpse(wbc)
+
+#Convertir variable diagnosis a categóricas
+
+wbc <- wbc %>% 
+         mutate(diagnosis = factor(diagnosis))
+
+wbc <- wbc %>% 
+  mutate(diagnosis = fct_relevel(diagnosis, "M"))
+
+wbc %>% count(diagnosis)
+```
+
+### Análisis Exploratorio de los datos
+
+Usamos skim() de skimr para una estadística univariada de los datos
+
+```{r}
+skim(wbc)
+```
+
+Ya que tenemos una variable de salida categórica, haremos una exploración de los datos númericos y compararemos esos datos númericos asociados a las células benignas y malignas
+
+```{r}
+wbc %>% pivot_longer(cols=-diagnosis, names_to = "parametro", values_to = "valor") %>% 
+  ggplot(aes(diagnosis, valor, fill= diagnosis))+
+  geom_boxplot() + facet_wrap(~parametro, scales = "free")
+```
+
+Adicionalmente haremos la evaluación a través de ggpairs de GGally
+
+```{r}
+ggpairs(wbc[1:8], aes(color = diagnosis))
+```
+
+La evaluación diagnostica permite diferenciar una clara separación entre células malignas y benignas asociada a los parametros descritos
+
+### Machine Learning con Tidymodels:
+
+Aplicaremos el flujo de trabajo del ecositema Tidymodels:
+
+#### División de los datos en grupo de entrenamiento y prueba
+
+```{r}
+set.seed(1970)
+wbc_split <- wbc %>% 
+                 initial_split(prop = 0.75, strata = diagnosis)
+
+wbc_train <- training(wbc_split)
+wbc_test <- testing(wbc_split)
+
+#Evaluación de la dimensión de los dos grupos de datos
+dim(wbc_train)
+dim(wbc_test)
+```
+
+### Feature Engeneerigng: Preparación de los datos para aplicación del algoritmo knn
+
+### ¿notas algo problemático en los
+
+Recuerda que el cálculo de la distancia para k-NN depende en gran medida de la escala de medición de las características de entrada.. Dado que la suavidad oscila entre 0,05 y 0,16 mientras que el área oscila entre 143,5 y 2501,0, el impacto del área será mucho mayor que el de la suavidad en el cálculo de la distancia.. Esto podría causar problemas para nuestro clasificador, así que vamos a aplicar la normalización para reescalar las características a un estándar usando el paquete recipes()
+
+```{r}
+#Construir el recipe
+# Se usará la variable diagnosis como variable respuesta, los datos numéricos se normalizarán con step_normalize
+wbc_recipe <- recipe(diagnosis ~., data= wbc_train) %>% 
+                  step_normalize(all_numeric()) #normalización
+
+#Imprimir el objeto wbc_recipe
+wbc_recipe
+```
+
+El objeto recipe contiene los procedimientos que se aplicarán al conjunto de variables así como el papel de cada una de las variables cuando se aplique el algoritmo. El recipe debe prepararse y aplicar luego a los datos de entreanimiento y prueba
+
+```{r}
+wbc_recipe_prep <- wbc_recipe %>% 
+  prep(training = wbc_train)
+
+#Baking
+wbc_training_baked <- wbc_recipe_prep %>% 
+  bake(new_data = NULL)
+
+#Datos de entrenamiento normalizados
+wbc_training_baked  %>% glimpse()
+
+
+#Datos de prueba normalizados
+wbc_test_baked <- wbc_recipe_prep %>% 
+  bake(new_data = wbc_test)
+
+wbc_test_baked %>% glimpse()
+
+
+
+```
+
+### Construccón del modelo de clasificación knn
+
+```{r}
+#Se especifica el modelo
+knn_model <- nearest_neighbor(neighbors = 21) %>% 
+  set_engine("kknn") %>% 
+  set_mode("classification")
+
+
+knn_model
+```
+
+#### Ajuste del modelo a los datos de entrenamiento
+
+```{r}
+knn_fit <- knn_model %>% 
+             fit(diagnosis~., data= wbc_training_baked)
+
+knn_fit
+```
+
+### Evaluación de la predicción del modelo
+
+Se predicen las clases suministrando la información de los datos de entrenamiento
+
+```{r}
+
+clases_preds <- predict(knn_fit, new_data = wbc_test_baked,
+                        type = "class")
+clases_preds
+```
+
+Se predicen las probabilidades
+
+```{r}
+prob_preds <- predict(knn_fit, new_data = wbc_test_baked,
+                        type = "prob")
+
+prob_preds
+```
+
+### Métricas del modelo
+
+```{r}
+#se crea una data.frame/tibble de resultados conteniendo los valores actuales (truth) y los valores predichos del modelo como clases y probabilidades
+
+resultados <- wbc_test %>% select(diagnosis) %>% 
+                bind_cols(clases_preds) %>% 
+                bind_cols(prob_preds)
+
+resultados
+```
+
+#### Matriz de Confusión
+
+```{r}
+conf_mat(resultados, truth = diagnosis, estimate = .pred_class) %>% autoplot("heatmap")
+```
+
+#### Accurracy , Área bajo la curva, sensibilidad y especificidad
+
+```{r}
+metricas_wbc <- metric_set(accuracy, roc_auc, sens, specificity)
+
+
+metricas_wbc(resultados, truth = diagnosis, estimate = .pred_class, .pred_M)
+```
+
+### Curva ROC
+
+Una **curva ROC** (acrónimo de ***Receiver Operating Characteristic***, o Característica Operativa del Receptor) es una representación gráfica de la sensibilidad frente a la especificidad para un sistema clasificador [binario](https://es.wikipedia.org/wiki/Sistema_binario "Sistema binario") según se varía el umbral de discriminación.
+
+```{r}
+roc_curve(resultados, truth = diagnosis, estimate = .pred_M) %>% autoplot()
+```
+
+## Conclusiones
+
+El algoritmo k-nearest neighbor (k-NN) es uno de los más simples y más utilizados en el aprendizaje automático. En este jemplo práctico se muestra una buena predicción del modelo, sin embargo, aunque es fácil de entender e implementar, tiene algunas desventajas:
+
+El rendimiento del k-NN puede ser lento en grandes conjuntos de datos debido a la necesidad de almacenar todo el conjunto de datos y calcular la distancia para cada instancia de prueba durante la clasificación.
+
+El k-NN es sensible a la escala de las características. Las características con una escala más grande tendrán un mayor peso en la distancia y, por lo tanto, tendrán un mayor impacto en la clasificación. Esto puede llevar a resultados no deseados si no se preprocesan adecuadamente los datos.
+
+El k-NN no proporciona una forma de ajustar la complejidad del modelo. El valor de k se elige de forma empírica y no hay una manera de saber cuál es el mejor valor para k sin probar varios valores diferentes.
+
+El k-NN es propenso a la interferencia de ruido en los datos. Las instancias de ruido o outliers pueden tener un gran impacto en los vecinos más cercanos y, por lo tanto, en la clasificación.
+
+El k-NN no proporciona una representación explícita de los patrones en los datos. Aunque es útil para hacer predicciones, no proporciona una comprensión de cómo se realizan las prediccio.
+
+Aquí usamos un criterio empírico paa elegir el valor de k vecinos, es importante considerar otras aproximaciones ya que la aproximación empírica se basa en la experiencia de ciertos conjunto de datos. Por otra parte se hizo una partición de los datos basados en un solo conjunto de entrenamiento y un conjunto de prueba; esto puede limitar el desarrollo del modelo por lo que es importante considerar otras aproximaciones que presentaremos en otra sección
+
+## Bibliografía
+
+1.  [Fix](https://es.wikipedia.org/wiki/Evelyn_Fix "Evelyn Fix"), E.; Hodges, J.L. (1989). «(1951): An Important Contribution to Nonparametric Discriminant Analysis and Density Estimation: Commentary on [Fix](https://es.wikipedia.org/wiki/Evelyn_Fix "Evelyn Fix") and Hodges (1951)». *International Statistical Review / Revue Internationale de Statistique* **57** (3): 233-238. [doi](https://es.wikipedia.org/wiki/Digital_object_identifier "Digital object identifier"):[10.2307/1403796](https://dx.doi.org/10.2307%2F1403796)..
+
+2.  [↑](https://es.wikipedia.org/wiki/K_vecinos_m%C3%A1s_pr%C3%B3ximos#cite_ref-2 "Volver arriba") Piryonesi, S. Madeh; El-Diraby, Tamer E. (2020-06). [«Role of Data Analytics in Infrastructure Asset Management: Overcoming Data Size and Quality Problems»](http://ascelibrary.org/doi/10.1061/JPEODX.0000175). *Journal of Transportation Engineering, Part B: Pavements* (en inglés) **146** (2): 04020022. [ISSN](https://es.wikipedia.org/wiki/ISSN "ISSN") [2573-5438](https://portal.issn.org/resource/issn/2573-5438). [doi](https://es.wikipedia.org/wiki/Digital_object_identifier "Digital object identifier"):[10.1061/JPEODX.0000175](https://dx.doi.org/10.1061%2FJPEODX.0000175). Consultado el 7 de agosto de 2020.
+
+3.  [↑](https://es.wikipedia.org/wiki/K_vecinos_m%C3%A1s_pr%C3%B3ximos#cite_ref-3 "Volver arriba") Hastie, Trevor.; Friedman, J. H. (Jerome H.) (2001). [*The elements of statistical learning : data mining, inference, and prediction : with 200 full-color illustrations*](https://www.worldcat.org/oclc/46809224). Springer. [ISBN](https://es.wikipedia.org/wiki/ISBN "ISBN") [0-387-95284-5](https://es.wikipedia.org/wiki/Especial:FuentesDeLibros/0-387-95284-5 "Especial:FuentesDeLibros/0-387-95284-5"). [OCLC](https://es.wikipedia.org/wiki/OCLC "OCLC") [46809224](https://www.worldcat.org/oclc/46809224). Consultado el 7 de agosto de 2020.
+
+4.  Kuhn, M., & Silge, J. (2022). *Tidy Modeling with R*. " O'Reilly Media, Inc.".<https://www.tidymodels.org/books/>
+
+5.  Ismail Taha and Joydeep Ghosh. [Characterization of the Wisconsin Breast cancer Database Using a Hybrid Symbolic-Connectionist System](http://rexa.info/paper/9f9df113476ffbf356892bb497bd2714e6f56d99). Proceedings of ANNIE. 1996
